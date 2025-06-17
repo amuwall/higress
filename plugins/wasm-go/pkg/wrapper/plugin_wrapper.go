@@ -67,6 +67,10 @@ type HttpContext interface {
 	BufferRequestBody()
 	// If the onHttpStreamingResponseBody handle is not set, and the onHttpResponseBody handle is set, the response body will be buffered by default
 	BufferResponseBody()
+	// If the onHttpStreamingResponseBody handle call this, the streaming response will return types.ActionPause
+	PauseStreamingResponse()
+	// If the onHttpStreamingResponseBody handle call this, the streaming response will return types.ActionContinue
+	ContinueStreamingResponse()
 	// If any request header is changed in onHttpRequestHeaders, envoy will re-calculate the route. Call this function to disable the re-routing.
 	// You need to call this before making any header modification operations.
 	DisableReroute()
@@ -519,17 +523,18 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
-	plugin                *CommonPluginCtx[PluginConfig]
-	config                *PluginConfig
-	needRequestBody       bool
-	needResponseBody      bool
-	streamingRequestBody  bool
-	streamingResponseBody bool
-	requestBodySize       int
-	responseBodySize      int
-	contextID             uint32
-	userContext           map[string]interface{}
-	userAttribute         map[string]interface{}
+	plugin                 *CommonPluginCtx[PluginConfig]
+	config                 *PluginConfig
+	needRequestBody        bool
+	needResponseBody       bool
+	streamingRequestBody   bool
+	streamingResponseBody  bool
+	pauseStreamingResponse bool
+	requestBodySize        int
+	responseBodySize       int
+	contextID              uint32
+	userContext            map[string]interface{}
+	userAttribute          map[string]interface{}
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) SetContext(key string, value interface{}) {
@@ -662,6 +667,14 @@ func (ctx *CommonHttpCtx[PluginConfig]) BufferResponseBody() {
 	ctx.streamingResponseBody = false
 }
 
+func (ctx *CommonHttpCtx[PluginConfig]) PauseStreamingResponse() {
+	ctx.pauseStreamingResponse = true
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) ContinueStreamingResponse() {
+	ctx.pauseStreamingResponse = false
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) DisableReroute() {
 	_ = proxywasm.SetProperty([]string{"clear_route_cache"}, []byte("off"))
 }
@@ -763,7 +776,11 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 			ctx.plugin.vm.log.Warnf("replace response body chunk failed: %v", err)
 			return types.ActionContinue
 		}
-		return types.ActionContinue
+		if ctx.pauseStreamingResponse {
+			return types.ActionPause
+		} else {
+			return types.ActionContinue
+		}
 	}
 	if ctx.plugin.vm.onHttpResponseBody != nil {
 		ctx.responseBodySize += bodySize
